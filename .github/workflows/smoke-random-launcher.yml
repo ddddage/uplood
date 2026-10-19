@@ -31,13 +31,16 @@ jobs:
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
           disable-animations: true
           script: |
-            set -o pipefail
-            adb install -r app.apk | tee install.txt
+            adb install -r app.apk > install.txt
+            cat install.txt
             adb logcat -c
-            adb shell am start -W -n com.randomtrigger.launcher/.MainActivity | tee launch.txt
+            adb shell am start -W -n com.randomtrigger.launcher/.MainActivity > launch.txt
+            cat launch.txt
             sleep 3
-            adb shell dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity' | tee resumed.txt || true
-            adb logcat -d -v time '*:E' | tee logcat-errors.txt
+            adb shell dumpsys activity activities > activities.txt
+            grep -E 'mResumedActivity|topResumedActivity' activities.txt > resumed.txt || true
+            cat resumed.txt
+            adb logcat -d -v time '*:E' > logcat-errors.txt
             adb exec-out screencap -p > screen.png
             grep -q 'Status: ok' launch.txt
             grep -q 'com.randomtrigger.launcher' resumed.txt
