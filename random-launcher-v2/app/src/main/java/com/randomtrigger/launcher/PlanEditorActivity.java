@@ -41,8 +41,8 @@ public final class PlanEditorActivity extends AppCompatActivity {
         setContentView(screen());
     }
 
-    private LinearLayout col(){LinearLayout l=new LinearLayout(this);l.setOrientation(1);return l;}
-    private LinearLayout row(){LinearLayout l=new LinearLayout(this);l.setOrientation(0);l.setGravity(Gravity.CENTER_VERTICAL);return l;}
+    private LinearLayout col(){LinearLayout l=new LinearLayout(this);l.setOrientation(LinearLayout.VERTICAL);return l;}
+    private LinearLayout row(){LinearLayout l=new LinearLayout(this);l.setOrientation(LinearLayout.HORIZONTAL);l.setGravity(Gravity.CENTER_VERTICAL);return l;}
     private int dp(int n){return Math.round(n*getResources().getDisplayMetrics().density);}
     private LinearLayout.LayoutParams margin(){
         LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);
