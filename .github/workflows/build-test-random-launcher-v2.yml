@@ -82,37 +82,23 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: |
-            set -eu
-            APK="random-launcher-v2/app/build/outputs/apk/debug/app-debug.apk"
-
-            adb install -r "$APK"
+            adb install -r random-launcher-v2/app/build/outputs/apk/debug/app-debug.apk
             adb shell pm list packages | grep -F "package:com.randomtrigger.launcher"
             adb shell pm grant com.randomtrigger.launcher android.permission.POST_NOTIFICATIONS || true
             adb logcat -c
-
-            START_OUTPUT="$(adb shell am start -W -n com.randomtrigger.launcher/.MainActivity)"
-            echo "$START_OUTPUT"
-            echo "$START_OUTPUT" | grep -q "Status: ok"
+            adb shell am start -W -n com.randomtrigger.launcher/.MainActivity | tee first-start.txt
+            grep -q "Status: ok" first-start.txt
             sleep 4
-
-            PID="$(adb shell pidof com.randomtrigger.launcher | tr -d '\r')"
-            test -n "$PID"
-            adb logcat -d --pid="$PID" | tee first-launch-logcat.txt
-            if grep -q "FATAL EXCEPTION" first-launch-logcat.txt; then
-              echo "App crashed during first launch"
-              exit 1
-            fi
-
+            test -n "$(adb shell pidof com.randomtrigger.launcher | tr -d '\r')"
+            adb logcat -d -b crash | tee first-launch-crash.txt
+            ! grep -q "com.randomtrigger.launcher" first-launch-crash.txt
             adb shell am force-stop com.randomtrigger.launcher
+            adb logcat -c
             adb shell monkey -p com.randomtrigger.launcher -c android.intent.category.LAUNCHER 1
             sleep 4
-            PID2="$(adb shell pidof com.randomtrigger.launcher | tr -d '\r')"
-            test -n "$PID2"
-            adb logcat -d --pid="$PID2" | tee launcher-reopen-logcat.txt
-            if grep -q "FATAL EXCEPTION" launcher-reopen-logcat.txt; then
-              echo "App crashed after launcher reopen"
-              exit 1
-            fi
+            test -n "$(adb shell pidof com.randomtrigger.launcher | tr -d '\r')"
+            adb logcat -d -b crash | tee launcher-reopen-crash.txt
+            ! grep -q "com.randomtrigger.launcher" launcher-reopen-crash.txt
 
       - name: Package verified APK
         shell: bash
