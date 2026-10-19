@@ -1,0 +1,55 @@
+name: Smoke Test Random Launcher APK
+
+on:
+  push:
+    branches:
+      - random-launcher-release
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Download APK
+        run: |
+          curl -L --fail --retry 3 https://github.com/ddddage/uplood/releases/download/random-launcher-v1.0/RandomLauncher-Android13-realme.apk -o app.apk
+          ls -lh app.apk
+          sha256sum app.apk
+
+      - name: Android 13 install and launch smoke test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          profile: pixel_5
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          disable-animations: true
+          script: |
+            set -o pipefail
+            adb install -r app.apk | tee install.txt
+            adb logcat -c
+            adb shell am start -W -n com.randomtrigger.launcher/.MainActivity | tee launch.txt
+            sleep 3
+            adb shell dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity' | tee resumed.txt || true
+            adb logcat -d -v time '*:E' | tee logcat-errors.txt
+            adb exec-out screencap -p > screen.png
+            grep -q 'Status: ok' launch.txt
+            grep -q 'com.randomtrigger.launcher' resumed.txt
+
+      - name: Upload smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: random-launcher-smoke-evidence
+          path: |
+            install.txt
+            launch.txt
+            resumed.txt
+            logcat-errors.txt
+            screen.png
