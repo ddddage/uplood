@@ -23,5 +23,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release delete random-launcher-v1.0 --yes --cleanup-tag || true
+          gh release delete random-launcher-v1.0 --repo ddddage/uplood --yes --cleanup-tag || true
           gh release create random-launcher-v1.0             RandomLauncher-Android13-realme.apk             SHA256.txt             --target random-launcher-release             --title "Random Launcher v1.0"             --notes "Android 13 / realme random third-party app launcher."
