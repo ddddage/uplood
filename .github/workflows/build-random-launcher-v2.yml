@@ -18,8 +18,10 @@ jobs:
 
       - name: Expand project
         run: |
+          set -euxo pipefail
           cat project.b64.part* > random-launcher-v2-project.zip.b64
           base64 --decode random-launcher-v2-project.zip.b64 > random-launcher-v2-project.zip
+          unzip -t random-launcher-v2-project.zip
           mkdir project
           unzip -q random-launcher-v2-project.zip -d project
 
@@ -34,14 +36,24 @@ jobs:
         with:
           gradle-version: "8.9"
 
-      - name: Install Android SDK components
+      - name: Locate and prepare Android SDK
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          set -euxo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager 2>/dev/null | head -n 1)"
+          test -n "$SDKMANAGER"
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+          test -x "$SDK_ROOT/build-tools/35.0.0/apksigner"
+          test -x "$SDK_ROOT/build-tools/35.0.0/aapt2"
 
       - name: Unit tests and debug build
         working-directory: project
         run: |
+          set -euxo pipefail
           gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug
 
       - name: Static APK verification
@@ -97,9 +109,13 @@ jobs:
           cp app/build/outputs/apk/release/app-release.apk RandomLauncher-v2.0.0-Android13-realme.apk
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs RandomLauncher-v2.0.0-Android13-realme.apk
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging RandomLauncher-v2.0.0-Android13-realme.apk | tee release-badging.txt
+          grep -q "package: name='com.yeying.randomlauncher'" release-badging.txt
+          grep -q "launchable-activity: name='com.yeying.randomlauncher.MainActivity'" release-badging.txt
           unzip -t RandomLauncher-v2.0.0-Android13-realme.apk
+          SIZE=$(stat -c%s RandomLauncher-v2.0.0-Android13-realme.apk)
+          echo "Release APK size: $SIZE bytes"
+          test "$SIZE" -gt 500000
           sha256sum RandomLauncher-v2.0.0-Android13-realme.apk > SHA256-v2.0.0.txt
-          stat -c "Release APK size: %s bytes" RandomLauncher-v2.0.0-Android13-realme.apk
 
       - name: Upload verified build artifact
         uses: actions/upload-artifact@v4
