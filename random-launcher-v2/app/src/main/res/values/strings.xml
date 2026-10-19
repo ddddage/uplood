@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">随机启动器</string>
-    <string name="trigger_channel_name">随机触发提醒</string>
-    <string name="trigger_channel_description">锁屏或系统限制后台启动时的高优先级提醒</string>
+    <string name="app_name">机票查询</string>
+    <string name="app_name_en">Flight Search</string>
+    <string name="trigger_channel_name">计划触发通知</string>
+    <string name="trigger_channel_description">独立计划的锁屏及后台通知</string>
 </resources>
