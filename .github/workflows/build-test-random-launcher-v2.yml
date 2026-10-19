@@ -1,0 +1,134 @@
+name: Build Test Random Launcher v2
+
+on:
+  push:
+    branches:
+      - random-launcher-v2-build
+
+permissions:
+  contents: write
+
+jobs:
+  build-test-publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Build and lint
+        run: gradle --no-daemon -p random-launcher-v2 :app:assembleDebug :app:lintDebug
+
+      - name: Verify APK structure, alignment, signature and resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="random-launcher-v2/app/build/outputs/apk/debug/app-debug.apk"
+          BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+
+          test -f "$APK"
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK"
+          "$BUILD_TOOLS/zipalign" -c -v 4 "$APK"
+
+          if [ -x "$BUILD_TOOLS/aapt" ]; then
+            "$BUILD_TOOLS/aapt" dump badging "$APK" | tee apk-badging.txt
+          else
+            "$BUILD_TOOLS/aapt2" dump badging "$APK" | tee apk-badging.txt
+          fi
+
+          grep -q "package: name='com.randomtrigger.launcher'" apk-badging.txt
+          grep -q "launchable-activity: name='com.randomtrigger.launcher.MainActivity'" apk-badging.txt
+
+          unzip -l "$APK" | tee apk-contents.txt
+          RESOURCE_SIZE="$(unzip -l "$APK" | awk '$4 == "resources.arsc" {print $1}')"
+          APK_SIZE="$(stat -c%s "$APK")"
+          echo "APK_SIZE=$APK_SIZE"
+          echo "RESOURCE_SIZE=$RESOURCE_SIZE"
+          test "$APK_SIZE" -gt 500000
+          test "$RESOURCE_SIZE" -gt 1000
+
+      - name: Install and launch on Android 13 emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          profile: pixel_4
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            set -euo pipefail
+            APK="random-launcher-v2/app/build/outputs/apk/debug/app-debug.apk"
+
+            adb install -r "$APK"
+            adb shell pm list packages | grep -F "package:com.randomtrigger.launcher"
+            adb shell pm grant com.randomtrigger.launcher android.permission.POST_NOTIFICATIONS || true
+            adb logcat -c
+
+            START_OUTPUT="$(adb shell am start -W -n com.randomtrigger.launcher/.MainActivity)"
+            echo "$START_OUTPUT"
+            echo "$START_OUTPUT" | grep -q "Status: ok"
+            sleep 4
+
+            PID="$(adb shell pidof com.randomtrigger.launcher | tr -d '\r')"
+            test -n "$PID"
+            adb logcat -d --pid="$PID" | tee first-launch-logcat.txt
+            if grep -q "FATAL EXCEPTION" first-launch-logcat.txt; then
+              echo "App crashed during first launch"
+              exit 1
+            fi
+
+            adb shell am force-stop com.randomtrigger.launcher
+            adb shell monkey -p com.randomtrigger.launcher -c android.intent.category.LAUNCHER 1
+            sleep 4
+            PID2="$(adb shell pidof com.randomtrigger.launcher | tr -d '\r')"
+            test -n "$PID2"
+            adb logcat -d --pid="$PID2" | tee launcher-reopen-logcat.txt
+            if grep -q "FATAL EXCEPTION" launcher-reopen-logcat.txt; then
+              echo "App crashed after launcher reopen"
+              exit 1
+            fi
+
+      - name: Package verified APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp random-launcher-v2/app/build/outputs/apk/debug/app-debug.apk RandomLauncher-v2.0.0-Android13-realme.apk
+          sha256sum RandomLauncher-v2.0.0-Android13-realme.apk | tee SHA256-v2.txt
+          ls -lh RandomLauncher-v2.0.0-Android13-realme.apk
+
+      - name: Upload verified build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RandomLauncher-v2.0.0-Android13-realme-verified
+          path: |
+            RandomLauncher-v2.0.0-Android13-realme.apk
+            SHA256-v2.txt
+            apk-badging.txt
+            apk-contents.txt
+          if-no-files-found: error
+
+      - name: Publish public APK release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release delete random-launcher-v2.0.0 --repo ddddage/uplood --yes --cleanup-tag || true
+          gh release create random-launcher-v2.0.0 --repo ddddage/uplood \
+            RandomLauncher-v2.0.0-Android13-realme.apk \
+            SHA256-v2.txt \
+            --target "$GITHUB_SHA" \
+            --title "Random Launcher v2.0.0 — Android 13 verified" \
+            --notes "Built with normal Android resources and AndroidX/Material. Verified by APK signature/alignment/resource checks, then installed and launched twice on an Android 13 emulator."
