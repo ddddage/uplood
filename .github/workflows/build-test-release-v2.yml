@@ -1,0 +1,147 @@
+name: Build Test Release Random Launcher V2
+
+on:
+  push:
+    branches:
+      - random-launcher-v2-tested
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-test-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reconstruct verified source project
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p random-launcher-v2/project
+          cat random-launcher-v2/chunks/chunk_*.b64 > random-launcher-v2/source.b64
+          base64 --decode random-launcher-v2/source.b64 > random-launcher-v2/source.zip
+          echo "63b44e73c13d6249f0687f8b1fc5c19377e2e25ee476ef72ed9e8f296531fe68  random-launcher-v2/source.zip" | sha256sum --check --strict
+          unzip -q random-launcher-v2/source.zip -d random-launcher-v2/project
+          test -f random-launcher-v2/project/app/src/main/java/com/randomtrigger/launcher/MainActivity.java
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Build release APK
+        working-directory: random-launcher-v2/project
+        run: gradle --no-daemon --stacktrace :app:assembleRelease
+
+      - name: Verify APK signature manifest and size
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="random-launcher-v2/project/app/build/outputs/apk/release/app-release.apk"
+          test -f "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" | tee random-launcher-v2/apksigner.txt
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee random-launcher-v2/badging.txt
+          grep -q "package: name='com.randomtrigger.launcher'" random-launcher-v2/badging.txt
+          grep -q "launchable-activity: name='com.randomtrigger.launcher.MainActivity'" random-launcher-v2/badging.txt
+          SIZE=$(stat -c%s "$APK")
+          echo "APK_SIZE_BYTES=$SIZE" | tee random-launcher-v2/apk-size.txt
+          test "$SIZE" -gt 1000000
+
+      - name: Install and launch on Android 13 emulator
+        uses: ReactiveCircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          cores: 2
+          ram-size: 4096M
+          disable-animations: true
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            set -euo pipefail
+            APK="$GITHUB_WORKSPACE/random-launcher-v2/project/app/build/outputs/apk/release/app-release.apk"
+            EVIDENCE="$GITHUB_WORKSPACE/random-launcher-v2/evidence"
+            mkdir -p "$EVIDENCE"
+
+            adb install -r "$APK" | tee "$EVIDENCE/install.txt"
+            grep -q "Success" "$EVIDENCE/install.txt"
+
+            adb logcat -c
+            adb shell am force-stop com.randomtrigger.launcher
+            adb shell am start -W -n com.randomtrigger.launcher/.MainActivity | tee "$EVIDENCE/start.txt"
+            grep -q "Status: ok" "$EVIDENCE/start.txt"
+
+            sleep 6
+            adb shell pidof com.randomtrigger.launcher | tee "$EVIDENCE/pid.txt"
+            test -s "$EVIDENCE/pid.txt"
+
+            adb shell dumpsys activity activities > "$EVIDENCE/activities.txt"
+            grep -q "com.randomtrigger.launcher/.MainActivity" "$EVIDENCE/activities.txt"
+
+            adb shell uiautomator dump /sdcard/random_launcher_window.xml
+            adb pull /sdcard/random_launcher_window.xml "$EVIDENCE/window.xml"
+            grep -Eq "随机启动器|先完成 3 项授权" "$EVIDENCE/window.xml"
+
+            adb exec-out screencap -p > "$EVIDENCE/home-screen.png"
+            adb logcat -d > "$EVIDENCE/logcat.txt"
+            if grep -A40 "FATAL EXCEPTION" "$EVIDENCE/logcat.txt" | grep -q "Process: com.randomtrigger.launcher"; then
+              echo "Detected app crash" >&2
+              exit 1
+            fi
+
+      - name: Prepare tested APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p random-launcher-v2/output
+          cp random-launcher-v2/project/app/build/outputs/apk/release/app-release.apk random-launcher-v2/output/RandomLauncher-v2.0-Android13-realme-tested.apk
+          sha256sum random-launcher-v2/output/RandomLauncher-v2.0-Android13-realme-tested.apk > random-launcher-v2/output/SHA256.txt
+          ls -lh random-launcher-v2/output/RandomLauncher-v2.0-Android13-realme-tested.apk
+
+      - name: Upload APK and test evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: RandomLauncher-v2.0-Android13-realme-tested
+          path: |
+            random-launcher-v2/output/RandomLauncher-v2.0-Android13-realme-tested.apk
+            random-launcher-v2/output/SHA256.txt
+            random-launcher-v2/apksigner.txt
+            random-launcher-v2/badging.txt
+            random-launcher-v2/apk-size.txt
+            random-launcher-v2/evidence/
+          if-no-files-found: error
+
+      - name: Publish tested APK release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release delete random-launcher-v2.0-tested --repo ddddage/uplood --yes --cleanup-tag || true
+          gh release create random-launcher-v2.0-tested \
+            --repo ddddage/uplood \
+            --target random-launcher-v2-tested \
+            --title "Random Launcher v2.0 - Android 13 tested" \
+            --notes "Rebuilt with AndroidX/Material. Signature and manifest verified. Installed and launched successfully on an Android 13 API 33 emulator; UI process remained alive without a fatal crash." \
+            random-launcher-v2/output/RandomLauncher-v2.0-Android13-realme-tested.apk \
+            random-launcher-v2/output/SHA256.txt
