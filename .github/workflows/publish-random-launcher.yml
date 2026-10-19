@@ -1,0 +1,27 @@
+name: Publish Random Launcher APK
+
+on:
+  push:
+    branches:
+      - random-launcher-release
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifact
+        run: |
+          curl -L --fail --retry 3 'https://sdmntprindiasocentral.oaiusercontent.com/files/00000000-4a3c-8211-982e-1e68f23ea703/raw?se=2026-10-19T02%3A59%3A59Z&sp=r&sv=2026-02-06&sr=b&scid=a9380dda-a3b0-5c4e-85d1-fdaedfcda552&skoid=54865dd2-31dc-44cc-a877-635aa4250446&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-10-18T18%3A44%3A15Z&ske=2026-10-19T18%3A44%3A15Z&sks=b&skv=2026-02-06&sig=aAm/tbx84XGBRrnqWK/KjZP4KjA2P71k9EJPtbhbwys%3D' -o artifact.zip
+          unzip -o artifact.zip
+          ls -lah
+          test -f RandomLauncher-Android13-realme.apk
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete random-launcher-v1.0 --yes --cleanup-tag || true
+          gh release create random-launcher-v1.0             RandomLauncher-Android13-realme.apk             SHA256.txt             --target random-launcher-release             --title "Random Launcher v1.0"             --notes "Android 13 / realme random third-party app launcher."
