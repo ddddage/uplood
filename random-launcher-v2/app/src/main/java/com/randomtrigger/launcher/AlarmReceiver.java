@@ -7,6 +7,8 @@ import android.os.PowerManager;
 
 /** Deliver each task by ID, reject cancelled or stale alarm broadcasts. */
 public final class AlarmReceiver extends BroadcastReceiver {
+    // Compatibility for the legacy scheduler during migration.
+    public static final String EXTRA_TEST="extra_test_trigger";
     @Override
     public void onReceive(Context context,Intent intent) {
         if(intent==null) return;
