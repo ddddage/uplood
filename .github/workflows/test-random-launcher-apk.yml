@@ -1,0 +1,67 @@
+name: Test Random Launcher APK on Android 13
+
+on:
+  push:
+    branches:
+      - random-launcher-release
+
+permissions:
+  contents: read
+
+jobs:
+  android13-launch-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install and launch on API 33 emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          profile: pixel_4
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            set -euxo pipefail
+            curl -L --fail --retry 3 \
+              https://github.com/ddddage/uplood/releases/download/random-launcher-v1.0/RandomLauncher-Android13-realme.apk \
+              -o RandomLauncher.apk
+            ls -lh RandomLauncher.apk
+            sha256sum RandomLauncher.apk
+            adb install -r RandomLauncher.apk
+            adb shell pm path com.randomtrigger.launcher
+            adb logcat -c
+            adb shell am start -W -n com.randomtrigger.launcher/.MainActivity | tee am-start.txt
+            sleep 5
+            PID=$(adb shell pidof com.randomtrigger.launcher | tr -d '\r')
+            test -n "$PID"
+            adb shell dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity' | tee activity.txt
+            adb exec-out screencap -p > launch-screen.png
+            adb logcat -d > logcat.txt
+            if grep -q 'FATAL EXCEPTION' logcat.txt; then
+              grep -A 80 -B 20 'FATAL EXCEPTION' logcat.txt
+              exit 1
+            fi
+            grep -q 'Status: ok' am-start.txt
+
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android13-launch-test-evidence
+          path: |
+            am-start.txt
+            activity.txt
+            launch-screen.png
+            logcat.txt
+          if-no-files-found: ignore
