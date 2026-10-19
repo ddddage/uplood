@@ -21,7 +21,7 @@ jobs:
 
       - name: Download exact public APK
         run: |
-          curl -L --fail --retry 3 https://raw.githubusercontent.com/ddddage/uplood/random-launcher-v11-tested/RandomLauncher-v1.1-tested.apk -o app-v11.apk
+          curl -L --fail --retry 3 https://github.com/ddddage/uplood/releases/download/random-launcher-v1.1-tested/RandomLauncher-v1.1-tested.apk -o app-v11.apk
           sha256sum app-v11.apk
           test "$(sha256sum app-v11.apk | awk '{print $1}')" = "5e5458595e6f965657c139dd8ca59c8fef10ee7adf60fed39855267e8f4c82d1"
 
