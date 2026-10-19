@@ -311,8 +311,8 @@ public class MainActivity extends AppCompatActivity {
         v.setPadding(0,dp(18),0,dp(8));
         root.addView(v);
     }
-    private LinearLayout row(){LinearLayout l=new LinearLayout(this);l.setOrientation(0);l.setGravity(Gravity.CENTER_VERTICAL);return l;}
-    private LinearLayout col(){LinearLayout l=new LinearLayout(this);l.setOrientation(1);return l;}
+    private LinearLayout row(){LinearLayout l=new LinearLayout(this);l.setOrientation(LinearLayout.HORIZONTAL);l.setGravity(Gravity.CENTER_VERTICAL);return l;}
+    private LinearLayout col(){LinearLayout l=new LinearLayout(this);l.setOrientation(LinearLayout.VERTICAL);return l;}
     private TextView txt(String t,int size,int color){TextView v=new TextView(this);v.setText(t);v.setTextSize(size);v.setTextColor(color);return v;}
     private Button btn(String t){Button b=new Button(this);b.setAllCaps(false);b.setText(t);b.setTextSize(13);b.setPadding(0,0,0,0);b.setMinWidth(0);b.setMinimumWidth(0);return b;}
     private MaterialCardView card(){
