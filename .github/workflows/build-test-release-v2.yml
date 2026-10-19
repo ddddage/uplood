@@ -70,6 +70,19 @@ jobs:
           echo "APK_SIZE_BYTES=$SIZE" | tee random-launcher-v2/apk-size.txt
           test "$SIZE" -gt 1000000
 
+      - name: Enable KVM acceleration
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -e /dev/kvm ]; then
+            sudo chmod 666 /dev/kvm
+            test -r /dev/kvm
+            test -w /dev/kvm
+            ls -l /dev/kvm
+          else
+            echo "/dev/kvm is unavailable; emulator runner will use software emulation"
+          fi
+
       - name: Install and launch on Android 13 emulator
         uses: ReactiveCircus/android-emulator-runner@v2
         with:
@@ -80,9 +93,10 @@ jobs:
           cores: 2
           ram-size: 4096M
           disable-animations: true
+          disable-linux-hw-accel: auto
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: |
-            set -euo pipefail
+            set -eu
             APK="$GITHUB_WORKSPACE/random-launcher-v2/project/app/build/outputs/apk/release/app-release.apk"
             EVIDENCE="$GITHUB_WORKSPACE/random-launcher-v2/evidence"
             mkdir -p "$EVIDENCE"
