@@ -83,6 +83,56 @@ jobs:
             echo "/dev/kvm is unavailable; emulator runner will use software emulation"
           fi
 
+      - name: Create emulator verification script
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > random-launcher-v2/run-emulator-test.sh <<'TEST_SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          APK="$GITHUB_WORKSPACE/random-launcher-v2/project/app/build/outputs/apk/release/app-release.apk"
+          EVIDENCE="$GITHUB_WORKSPACE/random-launcher-v2/evidence"
+          mkdir -p "$EVIDENCE"
+
+          collect_evidence() {
+            adb logcat -d > "$EVIDENCE/logcat.txt" 2>/dev/null || true
+            adb exec-out screencap -p > "$EVIDENCE/home-screen.png" 2>/dev/null || true
+            adb shell dumpsys activity activities > "$EVIDENCE/activities-final.txt" 2>/dev/null || true
+          }
+          trap collect_evidence EXIT
+
+          adb install -r "$APK" | tee "$EVIDENCE/install.txt"
+          grep -q "Success" "$EVIDENCE/install.txt"
+
+          adb logcat -c
+          adb shell input keyevent 82 || true
+          adb shell am force-stop com.randomtrigger.launcher
+          adb shell am start -W -n com.randomtrigger.launcher/.MainActivity | tee "$EVIDENCE/start.txt"
+          grep -q "Status: ok" "$EVIDENCE/start.txt"
+
+          sleep 8
+          adb shell pidof com.randomtrigger.launcher | tee "$EVIDENCE/pid.txt"
+          test -s "$EVIDENCE/pid.txt"
+
+          adb shell dumpsys activity activities > "$EVIDENCE/activities.txt"
+          grep -q "com.randomtrigger.launcher/.MainActivity" "$EVIDENCE/activities.txt"
+
+          adb shell uiautomator dump /sdcard/random_launcher_window.xml | tee "$EVIDENCE/uiautomator.txt"
+          adb pull /sdcard/random_launcher_window.xml "$EVIDENCE/window.xml"
+          grep -Eq "随机启动器|先完成 3 项授权|目标应用" "$EVIDENCE/window.xml"
+
+          adb logcat -d > "$EVIDENCE/logcat.txt"
+          if grep -A60 "FATAL EXCEPTION" "$EVIDENCE/logcat.txt" | grep -q "Process: com.randomtrigger.launcher"; then
+            echo "Detected app crash" >&2
+            exit 1
+          fi
+
+          echo "ANDROID_13_INSTALL_LAUNCH_TEST=PASS" | tee "$EVIDENCE/result.txt"
+          TEST_SCRIPT
+          chmod +x random-launcher-v2/run-emulator-test.sh
+          bash -n random-launcher-v2/run-emulator-test.sh
+
       - name: Install and launch on Android 13 emulator
         uses: ReactiveCircus/android-emulator-runner@v2
         with:
@@ -95,42 +145,13 @@ jobs:
           disable-animations: true
           disable-linux-hw-accel: auto
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: |
-            set -eu
-            APK="$GITHUB_WORKSPACE/random-launcher-v2/project/app/build/outputs/apk/release/app-release.apk"
-            EVIDENCE="$GITHUB_WORKSPACE/random-launcher-v2/evidence"
-            mkdir -p "$EVIDENCE"
-
-            adb install -r "$APK" | tee "$EVIDENCE/install.txt"
-            grep -q "Success" "$EVIDENCE/install.txt"
-
-            adb logcat -c
-            adb shell am force-stop com.randomtrigger.launcher
-            adb shell am start -W -n com.randomtrigger.launcher/.MainActivity | tee "$EVIDENCE/start.txt"
-            grep -q "Status: ok" "$EVIDENCE/start.txt"
-
-            sleep 6
-            adb shell pidof com.randomtrigger.launcher | tee "$EVIDENCE/pid.txt"
-            test -s "$EVIDENCE/pid.txt"
-
-            adb shell dumpsys activity activities > "$EVIDENCE/activities.txt"
-            grep -q "com.randomtrigger.launcher/.MainActivity" "$EVIDENCE/activities.txt"
-
-            adb shell uiautomator dump /sdcard/random_launcher_window.xml
-            adb pull /sdcard/random_launcher_window.xml "$EVIDENCE/window.xml"
-            grep -Eq "随机启动器|先完成 3 项授权" "$EVIDENCE/window.xml"
-
-            adb exec-out screencap -p > "$EVIDENCE/home-screen.png"
-            adb logcat -d > "$EVIDENCE/logcat.txt"
-            if grep -A40 "FATAL EXCEPTION" "$EVIDENCE/logcat.txt" | grep -q "Process: com.randomtrigger.launcher"; then
-              echo "Detected app crash" >&2
-              exit 1
-            fi
+          script: bash "$GITHUB_WORKSPACE/random-launcher-v2/run-emulator-test.sh"
 
       - name: Prepare tested APK
         shell: bash
         run: |
           set -euo pipefail
+          grep -q "ANDROID_13_INSTALL_LAUNCH_TEST=PASS" random-launcher-v2/evidence/result.txt
           mkdir -p random-launcher-v2/output
           cp random-launcher-v2/project/app/build/outputs/apk/release/app-release.apk random-launcher-v2/output/RandomLauncher-v2.0-Android13-realme-tested.apk
           sha256sum random-launcher-v2/output/RandomLauncher-v2.0-Android13-realme-tested.apk > random-launcher-v2/output/SHA256.txt
