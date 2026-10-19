@@ -53,8 +53,8 @@ public final class FlightSearchActivity extends AppCompatActivity {
         open(CTRIP_URL);
     }
 
-    private LinearLayout col(){LinearLayout x=new LinearLayout(this);x.setOrientation(1);return x;}
-    private LinearLayout row(){LinearLayout x=new LinearLayout(this);x.setOrientation(0);return x;}
+    private LinearLayout col(){LinearLayout x=new LinearLayout(this);x.setOrientation(LinearLayout.VERTICAL);return x;}
+    private LinearLayout row(){LinearLayout x=new LinearLayout(this);x.setOrientation(LinearLayout.HORIZONTAL);return x;}
     private LinearLayout.LayoutParams full(){LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.topMargin=dp(7);return p;}
     private TextView text(String value,int sp){TextView t=new TextView(this);t.setText(value);t.setTextSize(sp);t.setTextColor(Color.rgb(22,49,76));return t;}
     private Button button(String value){Button b=new Button(this);b.setAllCaps(false);b.setText(value);b.setTextSize(13);return b;}
