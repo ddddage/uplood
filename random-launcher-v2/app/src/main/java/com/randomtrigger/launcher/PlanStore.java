@@ -32,6 +32,8 @@ public final class PlanStore {
         public boolean directWhenLocked = true;
         public long nextAt;
         public long lastAt;
+        public long nextWindowDay;
+        public long lastWindowDay;
 
         public Plan copy() {
             Plan p = new Plan();
@@ -39,6 +41,7 @@ public final class PlanStore {
             p.hour=hour; p.minute=minute; p.minDelay=minDelay; p.maxDelay=maxDelay;
             p.weekdays=weekdays; p.enabled=enabled; p.directWhenLocked=directWhenLocked;
             p.nextAt=nextAt; p.lastAt=lastAt;
+            p.nextWindowDay=nextWindowDay; p.lastWindowDay=lastWindowDay;
             return p;
         }
 
@@ -59,6 +62,7 @@ public final class PlanStore {
             j.put("min",minDelay); j.put("max",maxDelay); j.put("days",weekdays);
             j.put("enabled",enabled); j.put("locked",directWhenLocked);
             j.put("next",nextAt); j.put("last",lastAt);
+            j.put("nextDay",nextWindowDay); j.put("lastDay",lastWindowDay);
             return j;
         }
 
@@ -71,6 +75,7 @@ public final class PlanStore {
             p.weekdays=j.optInt("days",31); p.enabled=j.optBoolean("enabled",true);
             p.directWhenLocked=j.optBoolean("locked",true);
             p.nextAt=j.optLong("next"); p.lastAt=j.optLong("last");
+            p.nextWindowDay=j.optLong("nextDay"); p.lastWindowDay=j.optLong("lastDay");
             return p;
         }
     }
@@ -161,6 +166,7 @@ public final class PlanStore {
             if(p.id>0) {
                 for(int i=0;i<plans.size();i++) if(plans.get(i).id==p.id) {
                     p.lastAt=plans.get(i).lastAt;
+                    p.lastWindowDay=plans.get(i).lastWindowDay;
                     plans.set(i,p); found=true; break;
                 }
                 if(!found) throw new IllegalArgumentException("编辑的计划已不存在");
@@ -191,7 +197,7 @@ public final class PlanStore {
             SharedPreferences s=prefs(c);
             List<Plan> plans=raw(s);
             for(Plan p:plans) if(p.id==id) {
-                p.enabled=enabled; p.nextAt=0L;
+                p.enabled=enabled; p.nextAt=0L; p.nextWindowDay=0L;
                 write(s,plans);
                 return true;
             }
@@ -199,16 +205,30 @@ public final class PlanStore {
         }
     }
 
-    public static boolean setNextTime(Context c,int id,long at) {
+    public static boolean setNextTime(Context c,int id,long at,long baseDay) {
         synchronized(MUTEX) {
             SharedPreferences s=prefs(c);
             List<Plan> plans=raw(s);
             for(Plan p:plans) if(p.id==id) {
-                p.nextAt=at;
+                p.nextAt=at; p.nextWindowDay=baseDay;
                 write(s,plans);
                 return true;
             }
             return false;
+        }
+    }
+
+    public static void expireMissed(Context c,int id,long expectedAt) {
+        synchronized(MUTEX) {
+            SharedPreferences s=prefs(c);
+            List<Plan> plans=raw(s);
+            for(Plan p:plans) if(p.id==id && p.nextAt==expectedAt) {
+                p.lastWindowDay=p.nextWindowDay;
+                p.nextWindowDay=0L;
+                p.nextAt=0L;
+                write(s,plans);
+                return;
+            }
         }
     }
 
@@ -219,6 +239,8 @@ public final class PlanStore {
             List<Plan> plans=raw(s);
             for(Plan p:plans) if(p.id==id) {
                 if(!p.enabled || p.nextAt!=expectedAt || expectedAt<=0L) return false;
+                p.lastWindowDay=p.nextWindowDay;
+                p.nextWindowDay=0L;
                 p.nextAt=0L;
                 p.lastAt=System.currentTimeMillis();
                 write(s,plans);
