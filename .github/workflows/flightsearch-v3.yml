@@ -1,0 +1,128 @@
+name: Flight Search v3 Build and Android13 Tests
+on:
+  push:
+    branches:
+      - random-launcher-v3-multiplan
+permissions:
+  contents: write
+jobs:
+  test-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Enable KVM
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Build and lint
+        run: gradle --no-daemon -p random-launcher-v2 :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug
+      - name: Verify APK signing and resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=random-launcher-v2/app/build/outputs/apk/debug/app-debug.apk
+          BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          "$BT/apksigner" verify --verbose --print-certs "$APK" | tee signature.txt
+          "$BT/zipalign" -c -v 4 "$APK" | tee zipalign.txt
+          "$BT/aapt" dump badging "$APK" | tee badging.txt
+          grep -q "versionName='3.0.0'" badging.txt
+          grep -q "package: name='com.randomtrigger.launcher'" badging.txt
+          grep -q "机票查询" badging.txt
+          test "$(stat -c%s "$APK")" -gt 1000000
+          sha256sum "$APK"
+      - name: Write emulator verification script
+        shell: bash
+        run: |
+          cat > test-emulator.sh <<'SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          APK=random-launcher-v2/app/build/outputs/apk/debug/app-debug.apk
+          TEST_APK=random-launcher-v2/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          adb install -r "$APK" | tee install.log
+          adb install -r "$TEST_APK" | tee test-install.log
+          adb shell pm grant com.randomtrigger.launcher android.permission.POST_NOTIFICATIONS || true
+          adb logcat -c
+          adb shell am instrument -w com.randomtrigger.launcher.test/androidx.test.runner.AndroidJUnitRunner | tee instrument.log
+          grep -q "OK (1 test)" instrument.log
+          adb shell am force-stop com.randomtrigger.launcher
+          adb shell am start -W -n com.randomtrigger.launcher/.MainActivity | tee launch.log
+          grep -q "Status: ok" launch.log
+          sleep 4
+          test -n "$(adb shell pidof com.randomtrigger.launcher | tr -d '\r')"
+          adb shell uiautomator dump /sdcard/v3-main.xml > /dev/null
+          adb pull /sdcard/v3-main.xml main-ui.xml
+          grep -q "机票查询" main-ui.xml
+          grep -q "新建计划" main-ui.xml
+          adb exec-out screencap -p > main-v3.png
+          python3 - <<'PY' > flight-tap.txt
+          import xml.etree.ElementTree as ET,re
+          root=ET.parse("main-ui.xml").getroot()
+          matches=[e for e in root.iter("node") if "✈ 机票查询" in e.attrib.get("text","")]
+          assert matches,"Cannot find the flight search button"
+          a=list(map(int,re.findall(r'\d+',matches[0].attrib["bounds"])))
+          print((a[0]+a[2])//2,(a[1]+a[3])//2)
+          PY
+          read x y < flight-tap.txt
+          adb shell input tap "$x" "$y"
+          sleep 3
+          adb shell uiautomator dump /sdcard/v3-flight.xml > /dev/null
+          adb pull /sdcard/v3-flight.xml flight-ui.xml
+          grep -q "按条件搜索航班" flight-ui.xml
+          grep -q "携程机票" flight-ui.xml
+          adb exec-out screencap -p > flight-v3.png
+          adb logcat -d -b crash > crash.log
+          ! grep -q "com.randomtrigger.launcher" crash.log
+          SCRIPT
+          chmod +x test-emulator.sh
+      - name: Android 13 installation, launch, 2-plan and flight tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          profile: pixel_4
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: bash test-emulator.sh
+      - name: Package signed APK
+        shell: bash
+        run: |
+          cp random-launcher-v2/app/build/outputs/apk/debug/app-debug.apk FlightSearch-v3.0.0-Android13-realme.apk
+          sha256sum FlightSearch-v3.0.0-Android13-realme.apk > SHA256-v3.txt
+          ls -lh FlightSearch-v3.0.0-Android13-realme.apk
+      - name: Upload APK and test evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: FlightSearch-v3.0.0-test-evidence
+          path: |
+            FlightSearch-v3.0.0-Android13-realme.apk
+            SHA256-v3.txt
+            signature.txt
+            badging.txt
+            zipalign.txt
+            instrument.log
+            launch.log
+            main-ui.xml
+            flight-ui.xml
+            main-v3.png
+            flight-v3.png
+            crash.log
+          if-no-files-found: ignore
+      - name: Publish verified signed APK
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create flight-search-v3.0.0 --repo ddddage/uplood FlightSearch-v3.0.0-Android13-realme.apk SHA256-v3.txt --target random-launcher-v3-multiplan --title "Flight Search v3.0.0 - Multi Plan" --notes "Signed Android APK. Flight search webview and editable independent random launcher tasks. Passed Android 13 emulator and instrumentation tests."
