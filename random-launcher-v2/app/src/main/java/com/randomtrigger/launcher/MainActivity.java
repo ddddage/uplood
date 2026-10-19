@@ -2,12 +2,9 @@ package com.randomtrigger.launcher;
 
 import android.Manifest;
 import android.app.AlertDialog;
-import android.app.TimePickerDialog;
 import android.content.ComponentName;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
-import android.content.pm.ResolveInfo;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
@@ -17,13 +14,9 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.Settings;
-import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
-import android.widget.CheckBox;
-import android.widget.EditText;
-import android.widget.GridLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -31,651 +24,304 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
-
+import com.google.android.material.card.MaterialCardView;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Date;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 
+/** Schedule dashboard, independent from FlightSearchActivity. */
 public class MainActivity extends AppCompatActivity {
-    private static final int REQUEST_NOTIFICATION = 9001;
-    private static final int ATTEMPT_NOTIFICATION = 1;
-    private static final int ATTEMPT_EXACT_ALARM = 1 << 1;
-    private static final int ATTEMPT_BATTERY = 1 << 2;
-
-    private SharedPreferences preferences;
-    private Button appButton;
-    private Button timeButton;
-    private EditText minDelayInput;
-    private EditText maxDelayInput;
-    private final CheckBox[] dayChecks = new CheckBox[7];
-    private CheckBox enabledCheck;
-    private CheckBox directLockedCheck;
-    private TextView scheduleStatus;
+    private static final int REQUEST_NOTIFICATIONS=901;
+    private LinearLayout plans;
+    private TextView stats;
     private TextView permissionStatus;
-    private int baseHour;
-    private int baseMinute;
+    private boolean firstDraw;
 
-    private boolean permissionFlowActive;
-    private int permissionAttempts;
-    private boolean activityCreated;
-
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        preferences = Scheduler.prefs(this);
-        TriggerService.ensureChannel(this);
-
-        baseHour = preferences.getInt(Scheduler.K_HOUR, 8);
-        baseMinute = preferences.getInt(Scheduler.K_MINUTE, 30);
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
-        }
-
-        setContentView(buildScreen());
-        activityCreated = true;
-        refreshAll();
-
-        if (!preferences.getBoolean(Scheduler.K_WIZARD_SHOWN, false)) {
-            preferences.edit().putBoolean(Scheduler.K_WIZARD_SHOWN, true).apply();
-            new Handler(Looper.getMainLooper()).postDelayed(this::beginFirstRunSetup, 600L);
+    @Override protected void onCreate(Bundle state) {
+        super.onCreate(state);
+        PlanTrigger.ensureChannel(this);
+        PlanStore.migrateOldPlan(this);
+        PlanScheduler.rescheduleAll(this,false);
+        setContentView(createScreen());
+        firstDraw=true;
+        refresh();
+        android.content.SharedPreferences setup=getSharedPreferences("first_run_v3",MODE_PRIVATE);
+        if(!setup.getBoolean("shown",false)) {
+            setup.edit().putBoolean("shown",true).apply();
+            new Handler(Looper.getMainLooper()).postDelayed(this::askPermissions,600);
         }
     }
 
-    @Override
-    protected void onResume() {
+    @Override protected void onResume() {
         super.onResume();
-        if (activityCreated) {
-            refreshAll();
-        }
-        if (permissionFlowActive) {
-            new Handler(Looper.getMainLooper()).postDelayed(this::continuePermissionFlow, 450L);
-        }
+        if(firstDraw) refresh();
     }
 
-    private View buildScreen() {
-        ScrollView scrollView = new ScrollView(this);
-        scrollView.setFillViewport(true);
+    private View createScreen() {
+        ScrollView scroll=new ScrollView(this);
+        LinearLayout root=col();
+        root.setPadding(dp(18),dp(18),dp(18),dp(42));
+        root.setBackgroundColor(Color.rgb(245,250,255));
+        scroll.addView(root);
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(18), dp(20), dp(18), dp(48));
-        root.setBackgroundColor(Color.rgb(247, 249, 252));
-        scrollView.addView(root);
-
-        TextView title = text("随机启动器", 29, Color.rgb(23, 32, 51));
+        TextView title=txt("机票查询",29,Color.rgb(12,62,112));
         title.setTypeface(Typeface.DEFAULT_BOLD);
         root.addView(title);
-
-        TextView subtitle = text(
-                "适配 realme / Android 13。每天在你设定的随机区间触发所选 App；计划由系统闹钟保存，App 被划掉或手机重启后会恢复。",
-                15,
-                Color.DKGRAY
-        );
-        subtitle.setPadding(0, dp(8), 0, dp(12));
+        TextView subtitle=txt("Flight Search  ·  多计划独立调度",15,Color.GRAY);
         root.addView(subtitle);
 
-        addSection(root, "目标应用");
-        appButton = button("选择第三方 App");
-        appButton.setOnClickListener(v -> chooseTargetApp());
-        root.addView(appButton, fullWidth());
+        LinearLayout nav=row();
+        Button flight=btn("✈ 机票查询");
+        flight.setOnClickListener(v->startActivity(new Intent(this,FlightSearchActivity.class)));
+        Button schedule=btn("⏰ 随机计划");
+        schedule.setEnabled(false);
+        nav.addView(flight,weight(1)); nav.addView(schedule,weight(1));
+        root.addView(nav,full());
 
-        addSection(root, "触发时间");
-        timeButton = button("");
-        timeButton.setOnClickListener(v -> new TimePickerDialog(
-                this,
-                (view, hourOfDay, minute) -> {
-                    baseHour = hourOfDay;
-                    baseMinute = minute;
-                    refreshTimeButton();
-                },
-                baseHour,
-                baseMinute,
-                true
-        ).show());
-        root.addView(timeButton, fullWidth());
+        TextView intro=txt("每条计划分别选择目标应用、时间段、执行星期。即使锁屏或关掉本页面，已设置的系统闹钟仍会保留。",14,Color.DKGRAY);
+        intro.setPadding(0,dp(12),0,dp(8));
+        root.addView(intro);
 
-        TextView randomHint = text(
-                "实际触发时间 = 基准时间 + 随机延迟。例如基准 08:30、随机 0～25 分钟，会在 08:30:00～08:55:59 之间随机。",
-                14,
-                Color.DKGRAY
-        );
-        randomHint.setPadding(0, dp(8), 0, dp(6));
-        root.addView(randomHint);
+        LinearLayout heading=row();
+        stats=txt("我的计划",21,Color.rgb(20,40,61));
+        stats.setTypeface(Typeface.DEFAULT_BOLD);
+        heading.addView(stats,weight(1));
+        Button add=btn("+ 新建计划");
+        add.setOnClickListener(v->editPlan(0));
+        heading.addView(add,weight(1));
+        root.addView(heading,full());
 
-        minDelayInput = numberInput(String.valueOf(preferences.getInt(Scheduler.K_RAND_MIN, 0)));
-        maxDelayInput = numberInput(String.valueOf(preferences.getInt(Scheduler.K_RAND_MAX, 30)));
-        root.addView(labeledInput("最小随机延迟（分钟）", minDelayInput));
-        root.addView(labeledInput("最大随机延迟（分钟）", maxDelayInput));
+        plans=col();
+        root.addView(plans,full());
 
-        addSection(root, "执行星期");
-        GridLayout dayGrid = new GridLayout(this);
-        dayGrid.setColumnCount(4);
-        String[] dayNames = {"周一", "周二", "周三", "周四", "周五", "周六", "周日"};
-        int dayMask = preferences.getInt(Scheduler.K_DAYS, 31);
-        for (int i = 0; i < dayChecks.length; i++) {
-            CheckBox checkBox = new CheckBox(this);
-            checkBox.setText(dayNames[i]);
-            checkBox.setChecked((dayMask & (1 << i)) != 0);
-            dayChecks[i] = checkBox;
-            GridLayout.LayoutParams params = new GridLayout.LayoutParams();
-            params.width = 0;
-            params.columnSpec = GridLayout.spec(i % 4, 1f);
-            params.setGravity(Gravity.FILL_HORIZONTAL);
-            dayGrid.addView(checkBox, params);
-        }
-        root.addView(dayGrid, fullWidth());
-
-        enabledCheck = new CheckBox(this);
-        enabledCheck.setText("启用随机计划");
-        enabledCheck.setTextSize(16f);
-        enabledCheck.setChecked(preferences.getBoolean(Scheduler.K_ENABLED, false));
-        root.addView(enabledCheck);
-
-        directLockedCheck = new CheckBox(this);
-        directLockedCheck.setText("锁屏时也尝试直接拉起目标 App（失败会用锁屏提醒兜底）");
-        directLockedCheck.setChecked(preferences.getBoolean(Scheduler.K_LOCK_DIRECT, true));
-        root.addView(directLockedCheck);
-
-        Button saveButton = button("保存并重新生成随机时间");
-        saveButton.setOnClickListener(v -> saveAndSchedule());
-        root.addView(saveButton, fullWidth());
-
-        scheduleStatus = text("", 16, Color.rgb(35, 100, 58));
-        scheduleStatus.setPadding(0, dp(12), 0, 0);
-        root.addView(scheduleStatus);
-
-        addSection(root, "实机测试");
-        Button openNowButton = button("立即打开目标 App");
-        openNowButton.setOnClickListener(v -> openTargetNow());
-        root.addView(openNowButton, fullWidth());
-
-        Button testButton = button("30 秒后测试锁屏触发");
-        testButton.setOnClickListener(v -> scheduleLockScreenTest());
-        root.addView(testButton, fullWidth());
-
-        addSection(root, "权限与 realme 后台设置");
-        permissionStatus = text("", 15, Color.DKGRAY);
+        heading(root,"权限状态");
+        permissionStatus=txt("",15,Color.DKGRAY);
         root.addView(permissionStatus);
 
-        Button wizardButton = button("运行权限设置向导");
-        wizardButton.setOnClickListener(v -> startPermissionFlow());
-        root.addView(wizardButton, fullWidth());
+        Button exact=btn("精确闹钟权限");
+        exact.setOnClickListener(v->openExact());
+        root.addView(exact,full());
 
-        Button exactButton = button("打开“闹钟和提醒 / 精确闹钟”");
-        exactButton.setOnClickListener(v -> openExactAlarmSettings());
-        root.addView(exactButton, fullWidth());
+        Button notify=btn("通知权限");
+        notify.setOnClickListener(v->requestNotification());
+        root.addView(notify,full());
 
-        Button batteryButton = button("请求忽略电池优化");
-        batteryButton.setOnClickListener(v -> requestBatteryExemption());
-        root.addView(batteryButton, fullWidth());
+        Button battery=btn("忽略电池优化");
+        battery.setOnClickListener(v->requestBattery());
+        root.addView(battery,full());
 
-        Button realmeButton = button("打开 realme 自启动 / 后台设置");
-        realmeButton.setOnClickListener(v -> openRealmeSettings());
-        root.addView(realmeButton, fullWidth());
+        Button realme=btn("realme 自启动和后台设置");
+        realme.setOnClickListener(v->realmeSettings());
+        root.addView(realme,full());
 
-        Button appSettingsButton = button("打开本应用系统详情");
-        appSettingsButton.setOnClickListener(v -> openAppDetails());
-        root.addView(appSettingsButton, fullWidth());
-
-        TextView note = text(
-                "\nrealme 上还要手动确认：允许后台活动、允许自动启动/自启动、允许本应用启动其他应用（如系统有此项），并把电池使用设为“不限制”。\n\n安全说明：本应用不会绕过 PIN、图案或指纹锁，也不会模拟点击、伪造位置或改动目标 App 数据。",
-                14,
-                Color.DKGRAY
-        );
-        root.addView(note);
-
-        return scrollView;
+        TextView info=txt("特别提醒：realme 系统可能禁止锁屏时直接拉起第三方 App。已授权的计划会在到点时尝试启动，并提供通知兜底；无法绕过 PIN/指纹锁。",13,Color.GRAY);
+        info.setPadding(0,dp(10),0,0);
+        root.addView(info);
+        return scroll;
     }
 
-    private void beginFirstRunSetup() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQUEST_NOTIFICATION);
-        } else {
-            showFirstRunExplanation();
+    private void refresh() {
+        List<PlanStore.Plan> list=PlanStore.list(this);
+        int enabled=0;
+        for(PlanStore.Plan p:list) if(p.enabled) enabled++;
+        stats.setText("我的计划  "+enabled+"/"+list.size()+" 运行中");
+        plans.removeAllViews();
+        if(list.isEmpty()) {
+            MaterialCardView card=card();
+            LinearLayout content=col();
+            content.setPadding(dp(14),dp(18),dp(14),dp(18));
+            content.addView(txt("还没有计划",18,Color.rgb(20,40,61)));
+            content.addView(txt("点击「+ 新建计划」，设置第一条随机启动计划。",14,Color.GRAY));
+            card.addView(content); plans.addView(card,full());
         }
+        for(PlanStore.Plan p:list) addCard(p);
+        updatePermission();
     }
 
-    private void showFirstRunExplanation() {
-        new AlertDialog.Builder(this)
-                .setTitle("先完成锁屏触发权限")
-                .setMessage(
-                        "为了让随机计划在息屏、锁屏和省电状态下尽量可靠，需要通知、精确闹钟和忽略电池优化权限。"
-                                + "\n\n向导只会打开系统授权页，不会偷偷修改设置。"
-                )
-                .setNegativeButton("稍后", null)
-                .setPositiveButton("开始授权", (dialog, which) -> startPermissionFlow())
-                .show();
+    private void addCard(PlanStore.Plan p) {
+        MaterialCardView card=card();
+        LinearLayout content=col();
+        content.setPadding(dp(12),dp(10),dp(12),dp(12));
+        TextView title=txt(p.name()+(p.enabled ? "  ✓" : "  [已暂停]"),19,Color.rgb(16,60,100));
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        content.addView(title);
+
+        content.addView(txt("目标 App："+p.appLabel,15,Color.DKGRAY));
+        String span=String.format(Locale.CHINA,"%02d:%02d + 随机 %d～%d 分钟",
+                p.hour,p.minute,p.minDelay,p.maxDelay);
+        content.addView(txt(span,15,Color.DKGRAY));
+        content.addView(txt("执行日："+weekString(p.weekdays),14,Color.DKGRAY));
+        SimpleDateFormat format=new SimpleDateFormat("MM月dd日 HH:mm:ss",Locale.CHINA);
+        String next=p.enabled && p.nextAt>0L ? format.format(new Date(p.nextAt)) : "无";
+        content.addView(txt("下次触发："+next,14,Color.rgb(35,101,62)));
+
+        LinearLayout controls=row();
+        Button edit=btn("编辑");
+        edit.setOnClickListener(v->editPlan(p.id));
+        Button toggle=btn(p.enabled?"暂停":"启用");
+        toggle.setOnClickListener(v->toggle(p));
+        Button test=btn("测试");
+        test.setOnClickListener(v->testPlan(p));
+        Button delete=btn("删除");
+        delete.setOnClickListener(v->deletePlan(p));
+        controls.addView(edit,weight(1));
+        controls.addView(toggle,weight(1));
+        controls.addView(test,weight(1));
+        controls.addView(delete,weight(1));
+        content.addView(controls,full());
+        card.addView(content);
+        plans.addView(card,full());
     }
 
-    private void startPermissionFlow() {
-        permissionFlowActive = true;
-        permissionAttempts = 0;
-        continuePermissionFlow();
+    private String weekString(int mask) {
+        String[] names={"一","二","三","四","五","六","日"};
+        StringBuilder sb=new StringBuilder();
+        for(int i=0;i<7;i++) if((mask & (1<<i))!=0) {
+            if(sb.length()>0) sb.append("、");
+            sb.append(names[i]);
+        }
+        return sb.toString();
     }
 
-    private void continuePermissionFlow() {
-        if (!permissionFlowActive || isFinishing()) {
-            return;
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-                && (permissionAttempts & ATTEMPT_NOTIFICATION) == 0) {
-            permissionAttempts |= ATTEMPT_NOTIFICATION;
-            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQUEST_NOTIFICATION);
-            return;
-        }
-
-        if (!Scheduler.canScheduleExact(this)
-                && (permissionAttempts & ATTEMPT_EXACT_ALARM) == 0) {
-            permissionAttempts |= ATTEMPT_EXACT_ALARM;
-            openExactAlarmSettings();
-            return;
-        }
-
-        if (!isIgnoringBatteryOptimizations()
-                && (permissionAttempts & ATTEMPT_BATTERY) == 0) {
-            permissionAttempts |= ATTEMPT_BATTERY;
-            requestBatteryExemption();
-            return;
-        }
-
-        permissionFlowActive = false;
-        refreshPermissions();
-        new AlertDialog.Builder(this)
-                .setTitle("系统权限步骤已完成")
-                .setMessage(
-                        "下一步请在 realme 设置里确认：后台活动、自启动、允许启动其他应用、电池不限制。"
-                                + "\n\n若某项刚才被你拒绝，可在首页单独重新打开。"
-                )
-                .setNegativeButton("返回首页", null)
-                .setPositiveButton("打开 realme 设置", (dialog, which) -> openRealmeSettings())
-                .show();
+    private void editPlan(int id) {
+        Intent i=new Intent(this,PlanEditorActivity.class);
+        i.putExtra(PlanEditorActivity.EXTRA_PLAN_ID,id);
+        startActivity(i);
     }
 
-    private void saveAndSchedule() {
-        if (!persistForm(true)) {
-            return;
-        }
-
-        long next = Scheduler.scheduleNext(this, true);
-        refreshScheduleStatus();
-        refreshPermissions();
-
-        if (!enabledCheck.isChecked()) {
-            toast("设置已保存，随机计划处于停用状态");
-            return;
-        }
-        if (next <= 0L) {
-            toast("没有生成下一次计划，请检查目标 App 和星期设置");
-            return;
-        }
-        toast("已保存并安排下一次随机触发");
-
-        if (!Scheduler.canScheduleExact(this)) {
-            new AlertDialog.Builder(this)
-                    .setTitle("还缺少精确闹钟权限")
-                    .setMessage("没有该权限时系统可能延迟触发。现在去授权？")
-                    .setNegativeButton("暂不", null)
-                    .setPositiveButton("去授权", (dialog, which) -> openExactAlarmSettings())
-                    .show();
-        }
-    }
-
-    private boolean persistForm(boolean requireWeekday) {
-        String targetPackage = preferences.getString(Scheduler.K_PACKAGE, "");
-        if (targetPackage == null || targetPackage.trim().isEmpty()) {
-            toast("请先选择目标 App");
-            return false;
-        }
-
-        int minDelay;
-        int maxDelay;
+    private void toggle(PlanStore.Plan p) {
         try {
-            minDelay = Integer.parseInt(minDelayInput.getText().toString().trim());
-            maxDelay = Integer.parseInt(maxDelayInput.getText().toString().trim());
-        } catch (NumberFormatException error) {
-            toast("随机延迟请输入整数分钟");
-            return false;
-        }
-
-        if (minDelay < 0 || maxDelay < minDelay || maxDelay > 1_440) {
-            toast("随机范围要求：0 ≤ 最小值 ≤ 最大值 ≤ 1440 分钟");
-            return false;
-        }
-
-        int dayMask = 0;
-        for (int i = 0; i < dayChecks.length; i++) {
-            if (dayChecks[i].isChecked()) {
-                dayMask |= 1 << i;
-            }
-        }
-        if (requireWeekday && dayMask == 0) {
-            toast("至少选择一个执行星期");
-            return false;
-        }
-
-        preferences.edit()
-                .putInt(Scheduler.K_HOUR, baseHour)
-                .putInt(Scheduler.K_MINUTE, baseMinute)
-                .putInt(Scheduler.K_RAND_MIN, minDelay)
-                .putInt(Scheduler.K_RAND_MAX, maxDelay)
-                .putInt(Scheduler.K_DAYS, dayMask)
-                .putBoolean(Scheduler.K_ENABLED, enabledCheck.isChecked())
-                .putBoolean(Scheduler.K_LOCK_DIRECT, directLockedCheck.isChecked())
-                .apply();
-
-        if (!enabledCheck.isChecked()) {
-            preferences.edit().putLong(Scheduler.K_NEXT, 0L).apply();
-            Scheduler.cancelMain(this);
-        }
-        return true;
+            PlanScheduler.cancel(this,p.id);
+            PlanStore.setEnabled(this,p.id,!p.enabled);
+            if(!p.enabled) PlanScheduler.schedule(this,p.id,true);
+            refresh();
+        } catch(Exception e){toast("切换失败："+e.getMessage());}
     }
 
-    private void chooseTargetApp() {
-        Intent queryIntent = new Intent(Intent.ACTION_MAIN);
-        queryIntent.addCategory(Intent.CATEGORY_LAUNCHER);
-        List<ResolveInfo> resolved = getPackageManager().queryIntentActivities(
-                queryIntent,
-                PackageManager.MATCH_ALL
-        );
-
-        Map<String, AppEntry> unique = new LinkedHashMap<>();
-        for (ResolveInfo info : resolved) {
-            if (info.activityInfo == null) {
-                continue;
-            }
-            String packageName = info.activityInfo.packageName;
-            if (getPackageName().equals(packageName)) {
-                continue;
-            }
-            String label = String.valueOf(info.loadLabel(getPackageManager()));
-            unique.put(packageName, new AppEntry(label, packageName));
-        }
-
-        List<AppEntry> apps = new ArrayList<>(unique.values());
-        Collections.sort(apps, (left, right) -> left.label.compareToIgnoreCase(right.label));
-        if (apps.isEmpty()) {
-            toast("没有读取到可启动的第三方 App");
-            return;
-        }
-
-        String[] rows = new String[apps.size()];
-        for (int i = 0; i < apps.size(); i++) {
-            AppEntry app = apps.get(i);
-            rows[i] = app.label + "\n" + app.packageName;
-        }
-
-        new AlertDialog.Builder(this)
-                .setTitle("选择目标 App")
-                .setItems(rows, (dialog, index) -> {
-                    AppEntry selected = apps.get(index);
-                    preferences.edit()
-                            .putString(Scheduler.K_PACKAGE, selected.packageName)
-                            .putString(Scheduler.K_LABEL, selected.label)
-                            .apply();
-                    refreshAppButton();
-                })
-                .setNegativeButton("取消", null)
-                .show();
+    private void deletePlan(PlanStore.Plan p) {
+        new AlertDialog.Builder(this).setTitle("删除 "+p.name()+"？")
+            .setMessage("只删除这一条计划，不影响其他计划。")
+            .setNegativeButton("取消",null)
+            .setPositiveButton("删除",(dialog,which)->{
+                PlanScheduler.cancel(this,p.id);
+                PlanStore.delete(this,p.id);
+                PlanTrigger.cancel(this,p.id);
+                refresh();
+            }).show();
     }
 
-    private void openTargetNow() {
-        String targetPackage = preferences.getString(Scheduler.K_PACKAGE, "");
-        if (targetPackage == null || targetPackage.trim().isEmpty()) {
-            toast("请先选择目标 App");
-            return;
-        }
-        if (!TriggerService.launchTarget(this, targetPackage)) {
-            toast("无法启动该 App，请重新选择");
+    private void testPlan(PlanStore.Plan p) {
+        try {
+            long at=PlanScheduler.scheduleTest(this,p.id,30);
+            if(at<=0L) {toast("目标应用不存在或计划信息不完整");return;}
+            new AlertDialog.Builder(this).setTitle("30 秒锁屏测试")
+                .setMessage(p.name()+" 将在 30 秒后触发。现在可以锁屏；这次测试不会改动正常计划或触发次数。")
+                .setPositiveButton("确定",null).show();
+        } catch(Exception e) {toast("安排测试失败："+e.getMessage());}
+    }
+
+    private void askPermissions() {
+        if(Build.VERSION.SDK_INT>=33 &&
+           checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                 !=PackageManager.PERMISSION_GRANTED) {
+            requestNotification();
+        } else showPermissionExplanation();
+    }
+
+    private void showPermissionExplanation() {
+        new AlertDialog.Builder(this).setTitle("锁屏运行权限")
+            .setMessage("需要精确闹钟、通知和电池优化豁免，才能尽可能在息屏时按计划触发。权限必须由你在系统设置中确认。")
+            .setNegativeButton("稍后",null)
+            .setPositiveButton("设置精确闹钟",(d,w)->openExact()).show();
+    }
+
+    @Override public void onRequestPermissionsResult(int requestCode,
+            @NonNull String[] permissions,@NonNull int[] results) {
+        super.onRequestPermissionsResult(requestCode,permissions,results);
+        if(requestCode==REQUEST_NOTIFICATIONS) {
+            updatePermission();
+            showPermissionExplanation();
         }
     }
 
-    private void scheduleLockScreenTest() {
-        if (!persistForm(false)) {
-            return;
-        }
-        long triggerAt = Scheduler.scheduleTest(this, 30);
-        if (triggerAt <= 0L) {
-            toast("测试安排失败");
-            return;
-        }
-        new AlertDialog.Builder(this)
-                .setTitle("30 秒锁屏测试已安排")
-                .setMessage("现在按电源键锁屏。到点后应尝试打开目标 App；若系统拦截，应显示锁屏提醒。")
-                .setPositiveButton("知道了", null)
-                .show();
+    private void updatePermission() {
+        if(permissionStatus==null) return;
+        PowerManager pm=(PowerManager)getSystemService(POWER_SERVICE);
+        boolean battery=pm!=null && pm.isIgnoringBatteryOptimizations(getPackageName());
+        boolean notifications=Build.VERSION.SDK_INT<33 ||
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED;
+        permissionStatus.setText("通知："+mark(notifications)+
+                "    精确闹钟："+mark(Scheduler.canScheduleExact(this))+
+                "\n电池优化豁免："+mark(battery)+"    realme 自启动：需手动确认");
     }
 
-    private void openExactAlarmSettings() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || Scheduler.canScheduleExact(this)) {
-            toast("精确闹钟权限已经可用");
-            return;
+    private String mark(boolean b) {return b?"✓":"待授权";}
+
+    private void requestNotification() {
+        if(Build.VERSION.SDK_INT>=33 &&
+          checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},REQUEST_NOTIFICATIONS);
+        else toast("通知权限已允许");
+    }
+
+    private void openExact() {
+        if(Build.VERSION.SDK_INT<31 || Scheduler.canScheduleExact(this)) {
+            toast("精确闹钟已经可用");return;
         }
         try {
-            Intent intent = new Intent(
-                    Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
-                    Uri.parse("package:" + getPackageName())
-            );
-            startActivity(intent);
-        } catch (Throwable error) {
-            try {
-                startActivity(new Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM));
-            } catch (Throwable ignored) {
-                openAppDetails();
-            }
-        }
+            Intent i=new Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                    Uri.parse("package:"+getPackageName()));
+            startActivity(i);
+        } catch(Exception ignored) {openDetails();}
     }
 
-    private void requestBatteryExemption() {
-        if (isIgnoringBatteryOptimizations()) {
-            toast("本应用已经被允许忽略电池优化");
-            return;
+    private void requestBattery() {
+        PowerManager pm=(PowerManager)getSystemService(POWER_SERVICE);
+        if(pm!=null && pm.isIgnoringBatteryOptimizations(getPackageName())) {
+            toast("电池优化豁免已允许");return;
         }
         try {
-            Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
-            intent.setData(Uri.parse("package:" + getPackageName()));
-            startActivity(intent);
-        } catch (Throwable error) {
-            try {
-                startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
-            } catch (Throwable ignored) {
-                openAppDetails();
-            }
-        }
+            Intent i=new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+            i.setData(Uri.parse("package:"+getPackageName()));
+            startActivity(i);
+        } catch(Exception e) {openDetails();}
     }
 
-    private boolean isIgnoringBatteryOptimizations() {
-        PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
-        return powerManager != null && powerManager.isIgnoringBatteryOptimizations(getPackageName());
-    }
-
-    private void openRealmeSettings() {
-        toast("请确认后台活动、自启动、允许启动其他应用和电池不限制");
-        String[][] candidates = {
-                {"com.oplus.battery", "com.oplus.powermanager.fuelgaue.PowerUsageModelActivity"},
-                {"com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity"},
-                {"com.oplus.safecenter", "com.oplus.safecenter.startupapp.StartupAppListActivity"},
-                {"com.oppo.safe", "com.oppo.safe.permission.startup.StartupAppListActivity"}
+    private void realmeSettings() {
+        String[][] candidates={
+            {"com.coloros.safecenter","com.coloros.safecenter.permission.startup.StartupAppListActivity"},
+            {"com.oplus.safecenter","com.oplus.safecenter.startupapp.StartupAppListActivity"},
+            {"com.oppo.safe","com.oppo.safe.permission.startup.StartupAppListActivity"}
         };
-
-        for (String[] candidate : candidates) {
-            try {
-                Intent intent = new Intent();
-                intent.setComponent(new ComponentName(candidate[0], candidate[1]));
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                if (intent.resolveActivity(getPackageManager()) != null) {
-                    startActivity(intent);
-                    return;
-                }
-            } catch (Throwable ignored) {
-            }
-        }
-        openAppDetails();
+        for(String[] pair:candidates) try {
+            Intent i=new Intent();i.setComponent(new ComponentName(pair[0],pair[1]));
+            startActivity(i);return;
+        } catch(Exception ignored){}
+        openDetails();
     }
-
-    private void openAppDetails() {
-        Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
-        intent.setData(Uri.parse("package:" + getPackageName()));
-        startActivity(intent);
+    private void openDetails() {
+        Intent i=new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+        i.setData(Uri.parse("package:"+getPackageName()));
+        startActivity(i);
     }
-
-    private void refreshAll() {
-        refreshAppButton();
-        refreshTimeButton();
-        refreshScheduleStatus();
-        refreshPermissions();
+    private void heading(LinearLayout root,String text) {
+        TextView v=txt(text,21,Color.rgb(12,62,112));
+        v.setTypeface(Typeface.DEFAULT_BOLD);
+        v.setPadding(0,dp(18),0,dp(8));
+        root.addView(v);
     }
-
-    private void refreshAppButton() {
-        if (appButton == null) {
-            return;
-        }
-        String packageName = preferences.getString(Scheduler.K_PACKAGE, "");
-        String label = preferences.getString(Scheduler.K_LABEL, "");
-        if (packageName == null || packageName.trim().isEmpty()) {
-            appButton.setText("选择第三方 App");
-        } else {
-            appButton.setText("已选择：" + label + "\n" + packageName);
-        }
+    private LinearLayout row(){LinearLayout l=new LinearLayout(this);l.setOrientation(0);l.setGravity(Gravity.CENTER_VERTICAL);return l;}
+    private LinearLayout col(){LinearLayout l=new LinearLayout(this);l.setOrientation(1);return l;}
+    private TextView txt(String t,int size,int color){TextView v=new TextView(this);v.setText(t);v.setTextSize(size);v.setTextColor(color);return v;}
+    private Button btn(String t){Button b=new Button(this);b.setAllCaps(false);b.setText(t);b.setTextSize(13);b.setPadding(0,0,0,0);b.setMinWidth(0);b.setMinimumWidth(0);return b;}
+    private MaterialCardView card(){
+        MaterialCardView c=new MaterialCardView(this);
+        c.setRadius(dp(13));c.setCardElevation(dp(2));c.setCardBackgroundColor(Color.WHITE);
+        c.setUseCompatPadding(true);return c;
     }
-
-    private void refreshTimeButton() {
-        if (timeButton != null) {
-            timeButton.setText(String.format(Locale.getDefault(), "基准时间：%02d:%02d", baseHour, baseMinute));
-        }
-    }
-
-    private void refreshScheduleStatus() {
-        if (scheduleStatus == null) {
-            return;
-        }
-        SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault());
-        long next = preferences.getLong(Scheduler.K_NEXT, 0L);
-        long last = preferences.getLong(Scheduler.K_LAST, 0L);
-        String nextText = next > 0L ? format.format(new Date(next)) : "无";
-        String lastText = last > 0L ? format.format(new Date(last)) : "无";
-        scheduleStatus.setText("下一次计划：" + nextText + "\n上一次触发：" + lastText);
-    }
-
-    private void refreshPermissions() {
-        if (permissionStatus == null) {
-            return;
-        }
-        boolean notificationGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
-                || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
-        permissionStatus.setText(
-                "通知权限：" + mark(notificationGranted)
-                        + "\n精确闹钟：" + mark(Scheduler.canScheduleExact(this))
-                        + "\n忽略电池优化：" + mark(isIgnoringBatteryOptimizations())
-                        + "\nrealme 自启动/后台活动：需要在厂商设置中手动确认"
-        );
-    }
-
-    @Override
-    public void onRequestPermissionsResult(
-            int requestCode,
-            @NonNull String[] permissions,
-            @NonNull int[] grantResults
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == REQUEST_NOTIFICATION) {
-            refreshPermissions();
-            if (permissionFlowActive) {
-                continuePermissionFlow();
-            } else {
-                showFirstRunExplanation();
-            }
-        }
-    }
-
-    private String mark(boolean allowed) {
-        return allowed ? "✓ 已允许" : "✕ 未允许";
-    }
-
-    private void addSection(LinearLayout root, String title) {
-        TextView view = text(title, 20, Color.rgb(23, 32, 51));
-        view.setTypeface(Typeface.DEFAULT_BOLD);
-        view.setPadding(0, dp(18), 0, dp(6));
-        root.addView(view);
-    }
-
-    private LinearLayout labeledInput(String label, EditText input) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(0, dp(4), 0, dp(4));
-
-        TextView labelView = text(label, 15, Color.rgb(23, 32, 51));
-        row.addView(labelView, weighted(2f));
-        row.addView(input, weighted(1f));
-        return row;
-    }
-
-    private TextView text(String value, int sp, int color) {
-        TextView view = new TextView(this);
-        view.setText(value);
-        view.setTextSize(sp);
-        view.setTextColor(color);
-        return view;
-    }
-
-    private Button button(String value) {
-        Button button = new Button(this);
-        button.setText(value);
-        button.setAllCaps(false);
-        button.setTextSize(15f);
-        return button;
-    }
-
-    private EditText numberInput(String value) {
-        EditText editText = new EditText(this);
-        editText.setText(value);
-        editText.setInputType(InputType.TYPE_CLASS_NUMBER);
-        editText.setGravity(Gravity.CENTER);
-        editText.setSelectAllOnFocus(true);
-        return editText;
-    }
-
-    private LinearLayout.LayoutParams fullWidth() {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        params.topMargin = dp(7);
-        return params;
-    }
-
-    private LinearLayout.LayoutParams weighted(float weight) {
-        return new LinearLayout.LayoutParams(
-                0,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                weight
-        );
-    }
-
-    private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
-    }
-
-    private void toast(String message) {
-        Toast.makeText(this, message, Toast.LENGTH_LONG).show();
-    }
-
-    private static final class AppEntry {
-        final String label;
-        final String packageName;
-
-        AppEntry(String label, String packageName) {
-            this.label = label;
-            this.packageName = packageName;
-        }
-    }
+    private LinearLayout.LayoutParams full(){LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.topMargin=dp(8);return p;}
+    private LinearLayout.LayoutParams weight(int w){return new LinearLayout.LayoutParams(0,-2,w);}
+    private int dp(int p){return Math.round(p*getResources().getDisplayMetrics().density);}
+    private void toast(String s){Toast.makeText(this,s,Toast.LENGTH_LONG).show();}
 }
