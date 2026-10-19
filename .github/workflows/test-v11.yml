@@ -1,0 +1,69 @@
+name: Test Random Launcher v1.1 exact public APK
+
+on:
+  push:
+    branches:
+      - random-launcher-v11-tested
+
+permissions:
+  contents: read
+
+jobs:
+  android13-v11:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Download exact public APK
+        run: |
+          curl -L --fail --retry 3 https://raw.githubusercontent.com/ddddage/uplood/random-launcher-v11-tested/RandomLauncher-v1.1-tested.apk -o app-v11.apk
+          sha256sum app-v11.apk
+          test "$(sha256sum app-v11.apk | awk '{print $1}')" = "5e5458595e6f965657c139dd8ca59c8fef10ee7adf60fed39855267e8f4c82d1"
+
+      - name: Android 13 exact APK test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          profile: pixel_5
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          disable-animations: true
+          script: |
+            adb install -r app-v11.apk > install.txt
+            cat install.txt
+            adb shell pm path com.randomtrigger.launcher > pm-path.txt
+            cat pm-path.txt
+            adb logcat -c
+            adb shell am force-stop com.randomtrigger.launcher
+            adb shell monkey -p com.randomtrigger.launcher -c android.intent.category.LAUNCHER 1 > launcher.txt
+            cat launcher.txt
+            sleep 4
+            adb shell dumpsys activity activities > activities.txt
+            grep -E 'mResumedActivity|topResumedActivity' activities.txt > resumed.txt || true
+            cat resumed.txt
+            adb logcat -d > logcat.txt
+            adb exec-out screencap -p > screen-v11.png
+            grep -q 'Success' install.txt
+            grep -q 'com.randomtrigger.launcher' pm-path.txt
+            grep -q 'com.randomtrigger.launcher/.MainActivity' resumed.txt
+            if grep -q 'FATAL EXCEPTION' logcat.txt; then exit 1; fi
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: random-launcher-v11-android13-evidence
+          path: |
+            install.txt
+            pm-path.txt
+            launcher.txt
+            resumed.txt
+            logcat.txt
+            screen-v11.png
+          if-no-files-found: ignore
