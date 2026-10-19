@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Flight Search</string>
+    <string name="app_name_en">Flight Search</string>
+    <string name="trigger_channel_name">Schedule alerts</string>
+    <string name="trigger_channel_description">Individual schedule notifications when device is locked</string>
+</resources>
