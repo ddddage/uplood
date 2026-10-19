@@ -24,13 +24,14 @@ public final class PlanScheduler {
 
     private PlanScheduler() {}
 
-    private static PendingIntent pending(Context ctx,int id,boolean test) {
+    private static PendingIntent pending(Context ctx,int id,boolean test,long at) {
         Intent i=new Intent(ctx,AlarmReceiver.class);
         // Data URI prevents Android PendingIntent matching two different tasks.
         i.setData(Uri.parse((test ? "flightsearch-test" : "flightsearch-plan")
                 + "://alarm/" + id));
         i.putExtra(EXTRA_PLAN_ID,id);
         i.putExtra(EXTRA_IS_TEST,test);
+        i.putExtra(EXTRA_DUE_AT,at);
         return PendingIntent.getBroadcast(ctx,id,i,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
@@ -39,8 +40,8 @@ public final class PlanScheduler {
         synchronized(LOCK) {
             AlarmManager am=(AlarmManager)c.getSystemService(Context.ALARM_SERVICE);
             if(am!=null) {
-                am.cancel(pending(c,planId,false));
-                am.cancel(pending(c,planId,true));
+                am.cancel(pending(c,planId,false,0L));
+                am.cancel(pending(c,planId,true,0L));
             }
         }
     }
@@ -107,7 +108,7 @@ public final class PlanScheduler {
             }
             long now=System.currentTimeMillis();
             if(!regenerate && plan.nextAt>now+1000L) {
-                register(c,pending(c,id,false),plan.nextAt);
+                register(c,pending(c,id,false,plan.nextAt),plan.nextAt);
                 return plan.nextAt;
             }
             if(!regenerate && plan.nextAt>0L && plan.nextAt<=now+1000L) {
@@ -123,7 +124,7 @@ public final class PlanScheduler {
             }
             // Save before registering alarm. If the app is killed, boot recovery sees it.
             PlanStore.setNextTime(c,id,slot.at,slot.baseDay);
-            register(c,pending(c,id,false),slot.at);
+            register(c,pending(c,id,false,slot.at),slot.at);
             return slot.at;
         }
     }
@@ -148,17 +149,17 @@ public final class PlanScheduler {
         PlanStore.Plan p=PlanStore.find(c,id);
         if(p==null || !p.valid()) return 0L;
         long at=System.currentTimeMillis()+Math.max(5,seconds)*1000L;
-        register(c,pending(c,id,true),at);
+        register(c,pending(c,id,true,at),at);
         return at;
     }
 
     /** Returns null for disabled, stale, duplicate, or deleted alarms. */
-    public static PlanStore.Plan acceptAlarm(Context c,int id,boolean test) {
+    public static PlanStore.Plan acceptAlarm(Context c,int id,boolean test,long dueAt) {
         synchronized(LOCK) {
             PlanStore.Plan plan=PlanStore.find(c,id);
             if(plan==null || !plan.valid()) return null;
             if(test) return plan;
-            if(!plan.enabled || plan.nextAt<=0L) return null;
+            if(!plan.enabled || plan.nextAt<=0L || plan.nextAt!=dueAt) return null;
             // Delivery should never be significantly premature.
             if(System.currentTimeMillis()+5000L<plan.nextAt) return null;
             if(!PlanStore.markTriggered(c,id,plan.nextAt)) return null;
