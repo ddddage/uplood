@@ -25,9 +25,8 @@ public final class AlarmReceiver extends BroadcastReceiver {
                 }
                 PlanStore.Plan plan=PlanScheduler.acceptAlarm(app,id,test,due);
                 if(plan!=null) PlanTrigger.trigger(app,plan);
-            } catch(Exception ignored) {
-                PlanStore.Plan p=PlanStore.find(app,id);
-                if(p!=null) PlanTrigger.trigger(app,p);
+            } catch(Exception error) {
+                android.util.Log.e("FlightSearchAlarm","Plan "+id+" failed",error);
             } finally {
                 if(wl!=null && wl.isHeld()) wl.release();
                 pending.finish();
